@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang = "en">
+<head>
+    <style>
+        body { margin: 0; }
+        svg { width: 100vw; height: 100vh;}
+    </style>
+</head>
+<body>
+    <svg></svg>
+    <script src="js/d3.min.js"></script>
+    <script>
+        const svg = d3.select("svg");
+        
+        // Get actual width and height of svg element
+        const svgWidth = svg.node().getBoundingClientRect().width;
+        const svgHeight = svg.node().getBoundingClientRect().height;
+
+        const margin = 100;
+        const width = svgWidth - 2 * margin;
+        const height = svgHeight - 2 * margin;
+
+        // Create canvas
+        const chart = svg.append("g").attr("transform", `translate(${margin}, ${margin})`);
+
+        /************************************************************************************
+        * Data
+        ************************************************************************************/
+        const data = [
+            { class: "Class 1", value: 87, color: "#405DE6" },       
+            { class: "Class 2", value: 71, color: "#833AB4" },
+            { class: "Class 3", value: 60, color: "#C13584" },
+            { class: "Class 4", value: 30, color: "#E1306C" },
+            { class: "Class 5", value: 59, color: "#F56040" }
+        ];
+
+        const xScale = d3.scaleBand().range([0, width]).domain(data.map(d => d.class)).padding(0.3);
+        const yScale = d3.scaleLinear().range([height, 0]).domain([0, 100]);
+
+        // Create particles from data
+        const particlesData = []
+        const radius = 20, diameter = radius * 2;
+        const particlesPerRow = Math.ceil(xScale.bandwidth() / diameter);
+        data.forEach(d => {
+            let barHeight = height - yScale(d.value);
+            let rows = Math.floor(barHeight / diameter);
+            for(let i = 0; i < particlesPerRow * rows; i++) {
+                particlesData.push({ ...d, id: i })
+            }
+        })
+        d3.shuffle(particlesData);
+
+        /************************************************************************************
+        * Bar Chart Axis
+        ************************************************************************************/
+        /*
+        * d3.axisLeft() and d3.axisBottom() returns a function.
+        * chart.append("g") appends an SVG group to SVG and returns a reference to itself.
+        * Using call(f) on a selecton will apply function f to the selection. 
+        * 
+        * axes group is created so the gooey filter will not be applied to axis
+        * 
+        */
+        
+        const axes = svg.append("g").attr("transform", `translate(${margin}, ${margin})`);
+        
+        // Create Y-Axis
+        axes.append("g") .call(d3.axisLeft(yScale));
+        
+        // Create X-Axis
+        axes.append("g").attr("transform", `translate(0, ${height})`).call(d3.axisBottom(xScale));
+    
+        /************************************************************************************
+        * Force Simulation
+        ************************************************************************************/
+        const simulation = d3.forceSimulation(particlesData)
+            .force("center", d3.forceCenter(width / 2, height / 2)) // Keeps elements in center
+            .force("charge", d3.forceManyBody().strength(5)) // Element attracts each other
+            .force("collision", d3.forceCollide().radius(5)) // Prevent elements overlapping
+            .on("tick", function() {
+                const particles = chart.selectAll("circle").data(particlesData);
+                particles.enter()
+                    .append("circle")
+                    .attr("r", 5)
+                    .merge(particles)
+                    .attr("cx", d => d.x)
+                    .attr("cy", d => d.y)
+                    .attr("fill", "url(#colorGradient)");
+                particles.exit().remove();
+            })
+
+        /************************************************************************************
+        * Gooey Filter
+        ************************************************************************************/
+        const defs = svg.append("defs");
+        const filter = defs.append("filter").attr("id", "gooey");
+        /* 
+        * Apply Gaussian blur.
+        * Set stdDeviation to 0 to remove gooey effect.
+        */
+        const gaussianBlur = filter.append('feGaussianBlur')
+            .attr('in','SourceGraphic') // Takes source graphics as input
+            .attr('stdDeviation','10')
+            .attr("color-interpolation-filters","sRGB")
+            .attr('result','blur'); // Name ouput as "blur"
+        /* 
+        * Increase contrast of alpha channel.
+        * When used together with blur creates a blob effect.
+        * The difference of the last two values of "values" determines strength of gooey effect
+        */
+        const colorMatrix = filter.append('feColorMatrix')
+            .attr('in','blur') // Takes output from previous step as input
+            .attr('mode','matrix')
+            .attr('values',`1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 ${radius * 8} -6`) 
+
+        // Apply gooey filter to canvas
+        chart.style("filter", "url(#gooey)");
+
+        /************************************************************************************
+        * Color Gradient
+        ************************************************************************************/
+        const colors = data.map(d => d.color);
+        defs.append("radialGradient")
+            .attr("id", "colorGradient") 
+            .attr("gradientUnits", "userSpaceOnUse") // Uses current user coordinate system
+            .attr("r", "20%") // Radius of the gradient
+            .selectAll("stop") 
+            .data(d3.range(colors.length))                  
+            .enter()
+            .append("stop") 
+            .attr("offset", (d) => {return d / colors.length * 100 + "%"}) 
+            .attr("stop-color", d => colors[d])
+            .exit()
+            .remove();
+
+        /************************************************************************************
+        * Loop
+        ************************************************************************************/
+        function createBars() {
+            // Stop the simulation
+            simulation.stop();
+            
+            // Arrange particles into bar chart
+            d3.selectAll("circle")
+                .transition()
+                .duration(1000)
+                .delay((d, i) => { return i * 10; })
+                .attr("cx", d => { return xScale(d.class) + (d.id % particlesPerRow) * diameter;})
+                .attr("cy", d => { return height - Math.floor(d.id / particlesPerRow) * diameter - radius; })
+                .attr("r", radius)
+                .attr("fill", d => d.color);
+            
+            // Remove Gooey effect to show individual particles
+            gaussianBlur
+                .transition()
+                .duration(particlesData.length * 20) // Gooey effect depends on number of particles 
+                .attrTween("stdDeviation", function() {
+                    return d3.interpolateString("10", "0")
+                });
+            colorMatrix
+                .transition()
+                .duration(3000)
+                .attrTween("values", function() {
+                    return d3.interpolateString(`1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 ${radius * 8} -6`,
+                                                `1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 ${radius} -6`)
+                });     
+        }
+
+        function createCluster() {
+            // Restart simulation and calculate final position of particles
+            simulation.restart().stop();
+            simulation.tick(300);
+            
+            // Move particles to center according to force
+            d3.selectAll("circle")
+                .transition()
+                .duration(1000)
+                .delay((d, i) => { return i * 10; })
+                .attr("cx", d => d.x)
+                .attr("cy", d => d.y)
+                .attr("r", 5)
+                .attr("fill", "url(#colorGradient)");
+            
+            // Restore gooey effect to merge particles
+            gaussianBlur
+                .transition()
+                .duration(particlesData.length * 20) // Gooey effect depends on number of particles 
+                .attrTween("stdDeviation", function() {
+                    return d3.interpolateString("0", "10")
+                }); 
+            colorMatrix
+                .transition()
+                .duration(2000)
+                .attrTween("values", function() {
+                    return d3.interpolateString(`1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 ${radius} -6`,
+                                                `1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 ${radius * 8} -6`)
+                });           
+        }
+
+        function loop() {
+            setTimeout(createBars, particlesData.length * 6)
+            setTimeout(createCluster, particlesData.length * 20);
+        }
+        loop();
+        setInterval(loop, particlesData.length * 35);
+    </script>
+</body>
+</html>
